@@ -82,7 +82,7 @@
 
 <script>
 const SAMPLE_RATE = 48000;
-const BUFFER_DELAY = 0.25; // colchón de ~250ms para absorber jitter de red
+const BUFFER_DELAY = 0.6; // colchón de ~600ms para absorber jitter de red (48kHz necesita más margen)
 
 let audioCtx;
 let ws;
