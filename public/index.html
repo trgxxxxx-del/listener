@@ -83,6 +83,7 @@
 <script>
 const SAMPLE_RATE = 48000;
 const BUFFER_DELAY = 0.6; // colchón de ~600ms para absorber jitter de red (48kHz necesita más margen)
+const MAX_FREQ = 20000; // límite superior para espectro y espectrograma
 
 let audioCtx;
 let ws;
@@ -209,23 +210,38 @@ function drawOscilloscope() {
   ctxOsc.stroke();
 }
 
+// Calcula cuántos bins de la FFT entran hasta MAX_FREQ
+function getMaxBin(bufferLength) {
+  const freqPerBin = audioCtx.sampleRate / analyser.fftSize;
+  return Math.max(1, Math.min(bufferLength, Math.ceil(MAX_FREQ / freqPerBin)));
+}
+
 function drawSpectrum() {
   const bufferLength = analyser.frequencyBinCount;
   const dataArray = new Uint8Array(bufferLength);
   analyser.getByteFrequencyData(dataArray);
+
+  const maxBin = getMaxBin(bufferLength); // solo bins hasta 20kHz
 
   const w = canvasSpec.width, h = canvasSpec.height;
   ctxSpec.fillStyle = "#000";
   ctxSpec.fillRect(0, 0, w, h);
 
   const barCount = 64; // agrupamos bins para que se vea prolijo
-  const binsPerBar = Math.floor(bufferLength / barCount);
+  const binsPerBar = Math.max(1, Math.floor(maxBin / barCount));
   const barWidth = w / barCount;
 
   for (let i = 0; i < barCount; i++) {
     let sum = 0;
-    for (let j = 0; j < binsPerBar; j++) sum += dataArray[i * binsPerBar + j];
-    const avg = sum / binsPerBar;
+    let count = 0;
+    for (let j = 0; j < binsPerBar; j++) {
+      const idx = i * binsPerBar + j;
+      if (idx < maxBin) {
+        sum += dataArray[idx];
+        count++;
+      }
+    }
+    const avg = count ? sum / count : 0;
     const barHeight = (avg / 255) * h;
 
     const hue = 140 - (avg / 255) * 140; // verde (bajo) a rojo (alto)
@@ -239,6 +255,8 @@ function drawSpectrogram() {
   const dataArray = new Uint8Array(bufferLength);
   analyser.getByteFrequencyData(dataArray);
 
+  const maxBin = getMaxBin(bufferLength); // solo bins hasta 20kHz
+
   const w = canvasSpectrogram.width, h = canvasSpectrogram.height;
 
   // Desplazamos todo el contenido 1px a la izquierda
@@ -247,8 +265,8 @@ function drawSpectrogram() {
 
   // Dibujamos una columna nueva en el borde derecho
   for (let y = 0; y < h; y++) {
-    const binIndex = Math.floor((1 - y / h) * bufferLength); // agudos arriba, graves abajo
-    const value = dataArray[Math.min(binIndex, bufferLength - 1)];
+    const binIndex = Math.floor((1 - y / h) * maxBin); // agudos arriba (20kHz), graves abajo (0Hz)
+    const value = dataArray[Math.min(binIndex, maxBin - 1)];
     const hue = 240 - (value / 255) * 240; // azul (silencio) a rojo (fuerte)
     const lightness = 5 + (value / 255) * 45;
     ctxSpectrogram.fillStyle = `hsl(${hue}, 100%, ${lightness}%)`;
