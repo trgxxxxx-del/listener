@@ -13,9 +13,10 @@
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    height: 100vh;
+    min-height: 100vh;
     margin: 0;
     text-align: center;
+    padding: 1rem;
   }
   button {
     font-size: 1.4rem;
@@ -41,6 +42,8 @@
     margin-top: 1.5rem;
     display: flex;
     gap: 0.5rem;
+    flex-wrap: wrap;
+    justify-content: center;
   }
   .modes button {
     font-size: 0.9rem;
@@ -55,12 +58,25 @@
     border-color: #2ecc71;
   }
 
+  .controls {
+    margin-top: 1rem;
+    display: none;
+    gap: 1rem;
+    align-items: center;
+    font-size: 0.8rem;
+    color: #aaa;
+  }
+  .controls.visible { display: flex; }
+  .controls input[type=range] { width: 140px; }
+  .controls span.val { color: #2ecc71; min-width: 3.5em; display: inline-block; }
+
   canvas {
     display: none;
     margin-top: 1.5rem;
     background: #000;
     border-radius: 8px;
     border: 1px solid #333;
+    max-width: 90vw;
   }
   canvas.visible { display: block; }
 </style>
@@ -76,19 +92,41 @@
     <button id="modeSpectrogram">Espectrograma</button>
   </div>
 
+  <div class="controls" id="spectrogramControls">
+    <label>Frec. máx: <span class="val" id="maxFreqVal">8000 Hz</span>
+      <input type="range" id="maxFreqSlider" min="1000" max="24000" step="500" value="8000">
+    </label>
+    <label>FFT: <span class="val" id="fftSizeVal">4096</span>
+      <input type="range" id="fftSizeSlider" min="8" max="13" step="1" value="12">
+    </label>
+  </div>
+
   <canvas id="canvasOsc" width="600" height="200" class="visible"></canvas>
   <canvas id="canvasSpec" width="600" height="200"></canvas>
-  <canvas id="canvasSpectrogram" width="600" height="200"></canvas>
+  <canvas id="canvasSpectrogram" width="900" height="450"></canvas>
 
 <script>
 const SAMPLE_RATE = 48000;
 const BUFFER_DELAY = 0.6; // colchón de ~600ms para absorber jitter de red (48kHz necesita más margen)
 
+// --- Configuración de resolución del espectrograma ---
+// Trade-off tiempo/frecuencia (principio de incertidumbre de Gabor):
+//   resolución en frecuencia = SAMPLE_RATE / fftSize   (bins más angostos = más fftSize)
+//   resolución temporal por ventana = fftSize / SAMPLE_RATE (ventana más larga = peor resolución temporal)
+// Por eso el espectrograma usa su PROPIO AnalyserNode, separado del de
+// osciloscopio/espectro, así se puede subir la resolución en frecuencia
+// sin afectar la respuesta del osciloscopio ni del espectro en barras.
+let SPECTROGRAM_FFT_SIZE = 4096;      // 48000/4096 ≈ 11.7 Hz/bin
+let SPECTROGRAM_MAX_FREQ = 8000;      // Hz mostrados en el eje vertical (zoom = más píxeles por bin)
+const SPECTROGRAM_SMOOTHING = 0.15;   // bajo = menos "arrastre" temporal entre cuadros
+
 let audioCtx;
 let ws;
 let nextStartTime = 0;
-let analyser;
+let analyser;             // para osciloscopio + espectro (fftSize chico, rápido)
+let analyserSpectrogram;  // para espectrograma (fftSize grande, configurable)
 let currentMode = "osc";
+let dpr = window.devicePixelRatio || 1;
 
 const startBtn = document.getElementById("startBtn");
 const statusText = document.getElementById("statusText");
@@ -99,11 +137,31 @@ const canvasSpec = document.getElementById("canvasSpec");
 const canvasSpectrogram = document.getElementById("canvasSpectrogram");
 const ctxOsc = canvasOsc.getContext("2d");
 const ctxSpec = canvasSpec.getContext("2d");
-const ctxSpectrogram = canvasSpectrogram.getContext("2d");
+const ctxSpectrogram = canvasSpectrogram.getContext("2d", { willReadFrequently: true });
+
+const spectrogramControls = document.getElementById("spectrogramControls");
+const maxFreqSlider = document.getElementById("maxFreqSlider");
+const maxFreqVal = document.getElementById("maxFreqVal");
+const fftSizeSlider = document.getElementById("fftSizeSlider");
+const fftSizeVal = document.getElementById("fftSizeVal");
 
 document.getElementById("modeOsc").addEventListener("click", () => setMode("osc"));
 document.getElementById("modeSpec").addEventListener("click", () => setMode("spec"));
 document.getElementById("modeSpectrogram").addEventListener("click", () => setMode("spectrogram"));
+
+maxFreqSlider.addEventListener("input", () => {
+  SPECTROGRAM_MAX_FREQ = parseInt(maxFreqSlider.value, 10);
+  maxFreqVal.textContent = `${SPECTROGRAM_MAX_FREQ} Hz`;
+  clearSpectrogram();
+});
+
+fftSizeSlider.addEventListener("input", () => {
+  const size = 2 ** parseInt(fftSizeSlider.value, 10);
+  SPECTROGRAM_FFT_SIZE = size;
+  fftSizeVal.textContent = size;
+  if (analyserSpectrogram) analyserSpectrogram.fftSize = size;
+  clearSpectrogram();
+});
 
 function setMode(mode) {
   currentMode = mode;
@@ -113,6 +171,7 @@ function setMode(mode) {
   canvasOsc.classList.toggle("visible", mode === "osc");
   canvasSpec.classList.toggle("visible", mode === "spec");
   canvasSpectrogram.classList.toggle("visible", mode === "spectrogram");
+  spectrogramControls.classList.toggle("visible", mode === "spectrogram");
 }
 
 startBtn.addEventListener("click", async () => {
@@ -124,6 +183,11 @@ startBtn.addEventListener("click", async () => {
   analyser.fftSize = 1024;
   analyser.smoothingTimeConstant = 0.6;
 
+  analyserSpectrogram = audioCtx.createAnalyser();
+  analyserSpectrogram.fftSize = SPECTROGRAM_FFT_SIZE;
+  analyserSpectrogram.smoothingTimeConstant = SPECTROGRAM_SMOOTHING;
+
+  setupSpectrogramCanvas();
   connect();
   requestAnimationFrame(drawLoop);
 });
@@ -161,6 +225,7 @@ function connect() {
     source.buffer = buffer;
     source.connect(audioCtx.destination);
     source.connect(analyser);
+    source.connect(analyserSpectrogram);
 
     const now = audioCtx.currentTime;
     if (nextStartTime < now) {
@@ -234,27 +299,64 @@ function drawSpectrum() {
   }
 }
 
+// Ajusta el tamaño real (en píxeles físicos) del canvas del espectrograma
+// según el devicePixelRatio de la pantalla, para que cada bin/columna se
+// pinte en un píxel real y no se vea interpolado/borroso.
+function setupSpectrogramCanvas() {
+  dpr = window.devicePixelRatio || 1;
+  const cssWidth = canvasSpectrogram.clientWidth || 900;
+  const cssHeight = canvasSpectrogram.clientHeight || 450;
+  canvasSpectrogram.width = Math.round(cssWidth * dpr);
+  canvasSpectrogram.height = Math.round(cssHeight * dpr);
+  clearSpectrogram();
+}
+
+function clearSpectrogram() {
+  ctxSpectrogram.fillStyle = "#000";
+  ctxSpectrogram.fillRect(0, 0, canvasSpectrogram.width, canvasSpectrogram.height);
+}
+
 function drawSpectrogram() {
-  const bufferLength = analyser.frequencyBinCount;
+  const bufferLength = analyserSpectrogram.frequencyBinCount; // fftSize/2
   const dataArray = new Uint8Array(bufferLength);
-  analyser.getByteFrequencyData(dataArray);
+  analyserSpectrogram.getByteFrequencyData(dataArray);
 
   const w = canvasSpectrogram.width, h = canvasSpectrogram.height;
+  const nyquist = SAMPLE_RATE / 2;
 
-  // Desplazamos todo el contenido 1px a la izquierda
+  // Solo usamos los bins hasta SPECTROGRAM_MAX_FREQ: "hacemos zoom" en la
+  // banda de interés para que cada bin ocupe más píxeles verticales en
+  // vez de repartir la altura del canvas entre todo el rango hasta 24kHz.
+  const maxBin = Math.min(
+    bufferLength - 1,
+    Math.round((SPECTROGRAM_MAX_FREQ / nyquist) * bufferLength)
+  );
+
+  // Desplazamos todo el contenido 1px (físico) a la izquierda
   const imageData = ctxSpectrogram.getImageData(1, 0, w - 1, h);
   ctxSpectrogram.putImageData(imageData, 0, 0);
 
-  // Dibujamos una columna nueva en el borde derecho
+  // Dibujamos una columna nueva en el borde derecho, con interpolación
+  // simple entre bins consecutivos para que la escala vertical no se
+  // vea "escalonada" cuando hay más píxeles de alto que bins.
   for (let y = 0; y < h; y++) {
-    const binIndex = Math.floor((1 - y / h) * bufferLength); // agudos arriba, graves abajo
-    const value = dataArray[Math.min(binIndex, bufferLength - 1)];
+    const frac = 1 - y / h;               // agudos arriba, graves abajo
+    const exactBin = frac * maxBin;
+    const binLow = Math.floor(exactBin);
+    const binHigh = Math.min(binLow + 1, maxBin);
+    const t = exactBin - binLow;
+    const value = dataArray[binLow] * (1 - t) + dataArray[binHigh] * t;
+
     const hue = 240 - (value / 255) * 240; // azul (silencio) a rojo (fuerte)
     const lightness = 5 + (value / 255) * 45;
     ctxSpectrogram.fillStyle = `hsl(${hue}, 100%, ${lightness}%)`;
     ctxSpectrogram.fillRect(w - 1, y, 1, 1);
   }
 }
+
+window.addEventListener("resize", () => {
+  if (analyserSpectrogram) setupSpectrogramCanvas();
+});
 </script>
 </body>
 </html>
