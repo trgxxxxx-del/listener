@@ -84,7 +84,7 @@
 const SAMPLE_RATE = 48000;
 const BUFFER_DELAY = 0.6; // colchón de ~600ms para absorber jitter de red (48kHz necesita más margen)
 const MAX_FREQ = 20000; // límite superior para espectro y espectrograma
-const MIN_FREQ = 20; // límite inferior para escala logarítmica (20Hz, umbral audible)
+const MIN_FREQ = 20; // límite inferior de frecuencia mostrada
 const SPECTROGRAM_SCROLL_MS = 150; // cada cuántos ms avanza una columna el espectrograma (más alto = más lento)
 
 let audioCtx;
@@ -272,13 +272,11 @@ function drawSpectrogram() {
   const imageData = ctxSpectrogram.getImageData(1, 0, w - 1, h);
   ctxSpectrogram.putImageData(imageData, 0, 0);
 
-  // Dibujamos una columna nueva en el borde derecho, con escala logarítmica en frecuencia
-  const logMin = Math.log10(MIN_FREQ);
-  const logMax = Math.log10(MAX_FREQ);
+  // Dibujamos una columna nueva en el borde derecho, con escala lineal en frecuencia
   for (let y = 0; y < h; y++) {
     // y=0 (arriba) -> MAX_FREQ, y=h-1 (abajo) -> MIN_FREQ
     const frac = 1 - y / h;
-    const freq = Math.pow(10, logMin + frac * (logMax - logMin));
+    const freq = MIN_FREQ + frac * (MAX_FREQ - MIN_FREQ);
     let binIndex = Math.round(freq / freqPerBin);
     binIndex = Math.max(0, Math.min(binIndex, maxBin - 1));
     const value = dataArray[binIndex];
