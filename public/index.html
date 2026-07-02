@@ -55,6 +55,20 @@
     border-color: #2ecc71;
   }
 
+  .gain-control {
+    margin-top: 1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+  }
+  .gain-control label {
+    color: #aaa;
+    font-size: 0.9rem;
+  }
+  .gain-control input[type="range"] {
+    accent-color: #2ecc71;
+  }
+
   canvas {
     display: none;
     margin-top: 1.5rem;
@@ -76,6 +90,11 @@
     <button id="modeSpectrogram">Espectrograma</button>
   </div>
 
+  <div class="gain-control">
+    <label for="gainSlider">🔊 Ganancia: <span id="gainValue">2.5x</span></label>
+    <input type="range" id="gainSlider" min="0.5" max="6" step="0.1" value="2.5">
+  </div>
+
   <canvas id="canvasOsc" width="600" height="200" class="visible"></canvas>
   <canvas id="canvasSpec" width="600" height="200"></canvas>
   <canvas id="canvasSpectrogram" width="600" height="200"></canvas>
@@ -91,6 +110,7 @@ let audioCtx;
 let ws;
 let nextStartTime = 0;
 let analyser;
+let gainNode;
 let currentMode = "osc";
 let lastSpectrogramShift = 0;
 
@@ -108,6 +128,12 @@ const ctxSpectrogram = canvasSpectrogram.getContext("2d");
 document.getElementById("modeOsc").addEventListener("click", () => setMode("osc"));
 document.getElementById("modeSpec").addEventListener("click", () => setMode("spec"));
 document.getElementById("modeSpectrogram").addEventListener("click", () => setMode("spectrogram"));
+
+document.getElementById("gainSlider").addEventListener("input", (e) => {
+  const val = parseFloat(e.target.value);
+  document.getElementById("gainValue").textContent = val.toFixed(1) + "x";
+  if (gainNode) gainNode.gain.value = val;
+});
 
 function setMode(mode) {
   currentMode = mode;
@@ -127,6 +153,11 @@ startBtn.addEventListener("click", async () => {
   analyser = audioCtx.createAnalyser();
   analyser.fftSize = 1024;
   analyser.smoothingTimeConstant = 0.6;
+
+  gainNode = audioCtx.createGain();
+  gainNode.gain.value = parseFloat(document.getElementById("gainSlider").value);
+  gainNode.connect(audioCtx.destination);
+  gainNode.connect(analyser);
 
   connect();
   requestAnimationFrame(drawLoop);
@@ -163,8 +194,7 @@ function connect() {
 
     const source = audioCtx.createBufferSource();
     source.buffer = buffer;
-    source.connect(audioCtx.destination);
-    source.connect(analyser);
+    source.connect(gainNode);
 
     const now = audioCtx.currentTime;
     if (nextStartTime < now) {
