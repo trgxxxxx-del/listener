@@ -81,8 +81,8 @@
   <canvas id="canvasSpectrogram" width="600" height="200"></canvas>
 
 <script>
-const SAMPLE_RATE = 32000;
-const BUFFER_DELAY = 0.6; // colchón de ~600ms para absorber jitter de red
+const SAMPLE_RATE = 48000;
+const BUFFER_DELAY = 0.6; // colchón de ~600ms para absorber jitter de red (48kHz necesita más margen)
 
 let audioCtx;
 let ws;
