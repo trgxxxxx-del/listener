@@ -172,6 +172,11 @@ function connect() {
   ws.onerror = () => ws.close();
 
   ws.onmessage = (event) => {
+  const now = performance.now();
+  if (window._lastMsgTime) {
+    console.log("intervalo:", (now - window._lastMsgTime).toFixed(0), "ms");
+  }
+  window._lastMsgTime = now;
     const int16 = new Int16Array(event.data);
     const float32 = new Float32Array(int16.length);
     for (let i = 0; i < int16.length; i++) {
