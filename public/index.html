@@ -217,7 +217,6 @@ function processAcousticWindow(int16) {
   acousticSampleCount += int16.length;
 
   if (acousticSampleCount >= WINDOW_SAMPLES) {
-    // Concatenar todos los chunks acumulados en la ventana
     const merged = new Int16Array(acousticSampleCount);
     let offset = 0;
     for (const chunk of acousticBuffer) {
@@ -225,13 +224,13 @@ function processAcousticWindow(int16) {
       offset += chunk.length;
     }
 
-    // I = Σ|y[n]|  (muestras normalizadas a [-1, 1])
+    // I = Σ|PCM16[n]|  (valores enteros crudos, sin normalizar)
     let I = 0;
     for (let i = 0; i < merged.length; i++) {
-      I += Math.abs(merged[i] / 32768);
+      I += Math.abs(merged[i]);
     }
 
-    acousticValueEl.textContent = "I = " + I.toFixed(4);
+    acousticValueEl.textContent = "I = " + I.toFixed(0);
 
     acousticBuffer = [];
     acousticSampleCount = 0;
