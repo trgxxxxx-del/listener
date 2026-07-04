@@ -37,19 +37,6 @@
   }
   .dot.live { background: #2ecc71; }
 
-  #acousticValue {
-    margin-top: 1rem;
-    font-size: 1.8rem;
-    font-weight: bold;
-    color: #2ecc71;
-    font-variant-numeric: tabular-nums;
-  }
-  #acousticLabel {
-    font-size: 0.8rem;
-    color: #888;
-    margin-top: 0.2rem;
-  }
-
   .modes {
     margin-top: 1.5rem;
     display: flex;
@@ -83,9 +70,6 @@
   <button id="startBtn">▶ Escuchar</button>
   <p id="status"><span class="dot" id="dot"></span><span id="statusText">Desconectado</span></p>
 
-  <div id="acousticValue">I = --</div>
-  <div id="acousticLabel">Suma |y[n]| — ventana de 1s</div>
-
   <div class="modes">
     <button id="modeOsc" class="active">Osciloscopio</button>
     <button id="modeSpec">Espectro</button>
@@ -103,7 +87,6 @@ const MAX_FREQ = 20000; // límite superior para espectro y espectrograma
 const MIN_FREQ = 20; // límite inferior de frecuencia mostrada
 const SPECTROGRAM_SCROLL_MS = 90; // cada cuántos ms avanza una columna el espectrograma (más alto = más lento)
 const GAIN = 10; // ganancia de audio fija (multiplicador). Si distorsiona, bajar este valor.
-const WINDOW_SAMPLES = SAMPLE_RATE; // 1 segundo @ 48kHz, para el índice acústico
 
 let audioCtx;
 let ws;
@@ -113,14 +96,9 @@ let gainNode;
 let currentMode = "osc";
 let lastSpectrogramShift = 0;
 
-// ── Índice acústico (suma de valores absolutos, ventana 1s) ──────────
-let acousticBuffer = [];
-let acousticSampleCount = 0;
-
 const startBtn = document.getElementById("startBtn");
 const statusText = document.getElementById("statusText");
 const dot = document.getElementById("dot");
-const acousticValueEl = document.getElementById("acousticValue");
 
 const canvasOsc = document.getElementById("canvasOsc");
 const canvasSpec = document.getElementById("canvasSpec");
@@ -182,10 +160,6 @@ function connect() {
 
   ws.onmessage = (event) => {
     const int16 = new Int16Array(event.data);
-
-    // Índice acústico: acumular muestras y calcular I cada 1s
-    processAcousticWindow(int16);
-
     const float32 = new Float32Array(int16.length);
     for (let i = 0; i < int16.length; i++) {
       float32[i] = int16[i] / 32768;
@@ -208,33 +182,6 @@ function connect() {
 
     statusText.textContent = "🔴 En vivo";
   };
-}
-
-// ---------- Índice acústico ----------
-
-function processAcousticWindow(int16) {
-  acousticBuffer.push(int16);
-  acousticSampleCount += int16.length;
-
-  if (acousticSampleCount >= WINDOW_SAMPLES) {
-    const merged = new Int16Array(acousticSampleCount);
-    let offset = 0;
-    for (const chunk of acousticBuffer) {
-      merged.set(chunk, offset);
-      offset += chunk.length;
-    }
-
-    // I = Σ|PCM16[n]|  (valores enteros crudos, sin normalizar)
-    let I = 0;
-    for (let i = 0; i < merged.length; i++) {
-      I += Math.abs(merged[i]);
-    }
-
-    acousticValueEl.textContent = "I = " + I.toFixed(0);
-
-    acousticBuffer = [];
-    acousticSampleCount = 0;
-  }
 }
 
 // ---------- Visualizaciones ----------
