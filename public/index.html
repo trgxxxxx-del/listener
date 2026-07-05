@@ -28,7 +28,6 @@
   }
   button:disabled { background: #555; color: #999; cursor: default; }
   #status { margin-top: 1.5rem; color: #aaa; }
-  #bufferInfo { margin-top: 0.3rem; color: #666; font-size: 0.8rem; }
   .dot {
     display: inline-block;
     width: 10px; height: 10px;
@@ -70,7 +69,6 @@
   <h1>🎙️ Voz en vivo</h1>
   <button id="startBtn">▶ Escuchar</button>
   <p id="status"><span class="dot" id="dot"></span><span id="statusText">Desconectado</span></p>
-  <p id="bufferInfo"></p>
 
   <div class="modes">
     <button id="modeOsc" class="active">Osciloscopio</button>
@@ -84,10 +82,7 @@
 
 <script>
 const SAMPLE_RATE = 48000;
-const INITIAL_BUFFER_DELAY = 0.6;   // colchón inicial (segundos) al conectar
-const MAX_BUFFER_DELAY = 2.5;       // tope máximo al que puede crecer el colchón
-const BUFFER_GROW_STEP = 0.2;       // cuánto crece el colchón cada vez que se detectan cortes seguidos
-const UNDERRUN_THRESHOLD = 3;       // cuántos cortes seguidos disparan el aumento de colchón
+const BUFFER_DELAY = 0.6; // colchón de ~600ms para absorber jitter de red (48kHz necesita más margen)
 const MAX_FREQ = 20000; // límite superior para espectro y espectrograma
 const MIN_FREQ = 20; // límite inferior de frecuencia mostrada
 const SPECTROGRAM_SCROLL_MS = 90; // cada cuántos ms avanza una columna el espectrograma (más alto = más lento)
@@ -101,13 +96,8 @@ let gainNode;
 let currentMode = "osc";
 let lastSpectrogramShift = 0;
 
-// ---------- Estado del buffer adaptativo de jitter ----------
-let dynamicDelay = INITIAL_BUFFER_DELAY; // colchón actual, puede crecer con el tiempo
-let underrunCount = 0;                   // cortes seguidos detectados desde el último ajuste
-
 const startBtn = document.getElementById("startBtn");
 const statusText = document.getElementById("statusText");
-const bufferInfo = document.getElementById("bufferInfo");
 const dot = document.getElementById("dot");
 
 const canvasOsc = document.getElementById("canvasOsc");
@@ -157,10 +147,7 @@ function connect() {
   ws.onopen = () => {
     statusText.textContent = "Conectado, esperando audio...";
     dot.classList.add("live");
-    // al reconectar arrancamos de nuevo con el colchón actual (que puede ya
-    // haber crecido de una conexión anterior si la red venía siendo mala)
-    nextStartTime = audioCtx.currentTime + dynamicDelay;
-    underrunCount = 0;
+    nextStartTime = audioCtx.currentTime + BUFFER_DELAY;
   };
 
   ws.onclose = () => {
@@ -172,11 +159,6 @@ function connect() {
   ws.onerror = () => ws.close();
 
   ws.onmessage = (event) => {
-  const now = performance.now();
-  if (window._lastMsgTime) {
-    console.log("intervalo:", (now - window._lastMsgTime).toFixed(0), "ms");
-  }
-  window._lastMsgTime = now;
     const int16 = new Int16Array(event.data);
     const float32 = new Float32Array(int16.length);
     for (let i = 0; i < int16.length; i++) {
@@ -191,19 +173,10 @@ function connect() {
     source.connect(gainNode);
 
     const now = audioCtx.currentTime;
-
     if (nextStartTime < now) {
-      // El colchón se vació: hubo un corte real de audio.
-      underrunCount++;
-      if (underrunCount >= UNDERRUN_THRESHOLD) {
-        dynamicDelay = Math.min(dynamicDelay + BUFFER_GROW_STEP, MAX_BUFFER_DELAY);
-        underrunCount = 0;
-        bufferInfo.textContent = `Colchón ajustado a ${dynamicDelay.toFixed(1)}s por cortes de red`;
-      }
-      // Recuperamos usando el colchón actual (que puede ya haber crecido)
-      nextStartTime = now + dynamicDelay;
+      // Nos atrasamos demasiado (hubo un corte grande): recuperamos
+      nextStartTime = now + 0.05;
     }
-
     source.start(nextStartTime);
     nextStartTime += buffer.duration;
 
