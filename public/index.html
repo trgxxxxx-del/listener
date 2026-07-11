@@ -95,6 +95,12 @@ const SPECTROGRAM_SCROLL_MS = 90;
 // datos; tener ganancia alta en ambos lados producía clipping.
 // Si se escucha bajo, subir de a 0.5 en 0.5. Si distorsiona, bajar.
 const GAIN = 2;
+// Máximo desfase permitido antes de resincronizar. El reloj del ESP32 (I2S)
+// y el reloj de audio del navegador nunca son exactamente iguales, así que
+// sin esta corrección el retraso se va acumulando de forma indefinida.
+// Si nextStartTime se adelanta más de esto respecto al tiempo real, se
+// descarta el excedente acumulado y se vuelve a alinear al BUFFER_DELAY.
+const MAX_DRIFT = BUFFER_DELAY + 0.5;
 
 let audioCtx;
 let ws;
@@ -181,12 +187,21 @@ function connect() {
     source.connect(gainNode);
 
     const now = audioCtx.currentTime;
+
     if (nextStartTime < now) {
       // Nos atrasamos demasiado (hubo un corte grande): recuperamos
       // con el mismo colchón configurado, en vez de un valor fijo chico,
       // para no volver a quedar al límite inmediatamente.
       nextStartTime = now + BUFFER_DELAY;
+    } else if (nextStartTime - now > MAX_DRIFT) {
+      // Nos adelantamos demasiado (drift acumulado entre el reloj del
+      // ESP32 y el reloj de audio del navegador): descartamos el
+      // excedente y resincronizamos al colchón configurado. Esto puede
+      // producir un pequeño "salto" perceptible, pero evita que la
+      // latencia crezca sin límite con el tiempo.
+      nextStartTime = now + BUFFER_DELAY;
     }
+
     source.start(nextStartTime);
     nextStartTime += buffer.duration;
 
