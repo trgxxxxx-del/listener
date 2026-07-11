@@ -63,10 +63,47 @@
     border: 1px solid #333;
   }
   canvas.visible { display: block; }
+
+  .barrio-picker {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.4rem;
+    margin-bottom: 1.5rem;
+  }
+  .barrio-picker label {
+    font-size: 0.8rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #888;
+  }
+  #barrioSelect {
+    font-size: 1.1rem;
+    padding: 0.5rem 1rem;
+    border-radius: 8px;
+    border: 1px solid #444;
+    background: #1a1a1a;
+    color: #eee;
+  }
+  #barrioSelect option:disabled { color: #666; }
+  .barrio-dot {
+    display: inline-block;
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: #555;
+    margin-right: 6px;
+  }
+  .barrio-dot.online { background: #2ecc71; }
 </style>
 </head>
 <body>
   <h1>🎙️ Voz en vivo</h1>
+
+  <div class="barrio-picker">
+    <label for="barrioSelect">Tu barrio</label>
+    <select id="barrioSelect"></select>
+  </div>
+
   <button id="startBtn">▶ Escuchar</button>
   <p id="status"><span class="dot" id="dot"></span><span id="statusText">Desconectado</span></p>
 
@@ -102,6 +139,16 @@ const GAIN = 2;
 // descarta el excedente acumulado y se vuelve a alinear al BUFFER_DELAY.
 const MAX_DRIFT = BUFFER_DELAY + 0.5;
 
+// Barrios disponibles. El "value" de cada uno DEBE coincidir exactamente
+// con el STATION_ID configurado en el firmware de esa placa.
+const BARRIOS = [
+  { value: "villa-alem-1", label: "Villa Alem 1" },
+  { value: "villa-alem-2", label: "Villa Alem 2" },
+  { value: "villa-alem-3", label: "Villa Alem 3" },
+];
+const BARRIO_GUARDADO = "voz_en_vivo_barrio";
+const ESTADO_POLL_MS = 8000;
+
 let audioCtx;
 let ws;
 let nextStartTime = 0;
@@ -109,10 +156,51 @@ let analyser;
 let gainNode;
 let currentMode = "osc";
 let lastSpectrogramShift = 0;
+let currentBarrio = localStorage.getItem(BARRIO_GUARDADO) || BARRIOS[0].value;
 
 const startBtn = document.getElementById("startBtn");
 const statusText = document.getElementById("statusText");
 const dot = document.getElementById("dot");
+const barrioSelect = document.getElementById("barrioSelect");
+
+BARRIOS.forEach(({ value, label }) => {
+  const opt = document.createElement("option");
+  opt.value = value;
+  opt.textContent = label;
+  if (value === currentBarrio) opt.selected = true;
+  barrioSelect.appendChild(opt);
+});
+
+barrioSelect.addEventListener("change", () => {
+  currentBarrio = barrioSelect.value;
+  localStorage.setItem(BARRIO_GUARDADO, currentBarrio);
+  // Si ya estábamos escuchando, saltamos al nuevo barrio sin tener que
+  // tocar "Escuchar" de nuevo.
+  if (audioCtx && ws) {
+    ws.onclose = null; // evitar el reintento automático de la conexión vieja
+    ws.close();
+    statusText.textContent = "Cambiando de barrio...";
+    nextStartTime = audioCtx.currentTime + BUFFER_DELAY;
+    connect();
+  }
+});
+
+async function actualizarEstadoBarrios() {
+  try {
+    const res = await fetch("/api/estaciones");
+    const estado = await res.json();
+    for (const opt of barrioSelect.options) {
+      const info = estado[opt.value];
+      const online = info ? info.online : false;
+      opt.textContent = `${online ? "🟢" : "⚪"} ${BARRIOS.find(b => b.value === opt.value).label}`;
+    }
+  } catch {
+    // Si /api/estaciones falla (servidor viejo, red caída, etc.) dejamos
+    // las etiquetas simples, sin bloquear el resto de la página.
+  }
+}
+actualizarEstadoBarrios();
+setInterval(actualizarEstadoBarrios, ESTADO_POLL_MS);
 
 const canvasOsc = document.getElementById("canvasOsc");
 const canvasSpec = document.getElementById("canvasSpec");
@@ -155,7 +243,7 @@ startBtn.addEventListener("click", async () => {
 
 function connect() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
-  ws = new WebSocket(`${proto}://${location.host}/listen`);
+  ws = new WebSocket(`${proto}://${location.host}/listen/${encodeURIComponent(currentBarrio)}`);
   ws.binaryType = "arraybuffer";
 
   ws.onopen = () => {
